@@ -8,7 +8,7 @@
 const unsigned char POWER = 3;
 const unsigned char GROUND = 2;
 
-struct LEDMatrix
+class LEDMatrix
 {
   public:
   const unsigned char MATRIX_DIMENSION = 8; // 8x8 LED Matrix
@@ -18,7 +18,7 @@ struct LEDMatrix
   const unsigned char CS_PIN_ID = 5;
   const unsigned char DOUT_PIN_ID = 7;
   
-  struct LEDState
+  class LEDState
   {
     public:
     const unsigned char NOOP = 0x00;
@@ -36,7 +36,7 @@ struct LEDMatrix
     const unsigned char SHUTDOWN = 0x0c;
     const unsigned char DISPLAY_TEST = 0x0F;
 
-    struct LEDRow
+    class LEDRow
     {
       public:
         unsigned char address;
