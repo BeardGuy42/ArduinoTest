@@ -230,8 +230,8 @@ class Ball
 
   void Tick(float dt)
   {
-    x = vx*dt;
-    y = vy*dt;
+    x += vx*dt;
+    y += vy*dt;
 
     if(x > 7)
     {
@@ -300,6 +300,9 @@ void loop() {
   static int lastTime = 0;
   static Ball ball;
 
+  float dt = ((micros() - lastTime) / 1000000);
+  lastTime = micros();
+
   gyroscope->read();
   float ax = gyroscope->getAccelX();
   float ay = gyroscope->getAccelY();
@@ -312,17 +315,19 @@ void loop() {
   Serial.println("\n\tACCELEROMETER\tTEMPERATURE\tVELOCITY");
   Serial.println("\tax\tay\tT\tvx\tvy");
 
-  ball.vx += ax;
-  ball.vy += ay;
+  ball.vx += ax*dt;
+  ball.vy += ay*dt;
 
-  if(ball.vx > 2.5)
+  if(abs(ball.vx) > 0.025)
   {
-    ball.vx = 2.5;
+    ball.vx /= abs(ball.vx);
+    ball.vx *= 0.025;
   }
   
-  if(ball.vy > 2.5)
+  if(abs(ball.vy) > 0.025)
   {
-    ball.vy = 2.5;
+    ball.vy /= abs(ball.vy);
+    ball.vy *= 0.025;
   }
 
   Serial.print(timestep);
@@ -337,8 +342,7 @@ void loop() {
   Serial.print('\t');
   Serial.print(ball.vy);
   Serial.println();
-  ball.Tick(((micros() - lastTime) / 1000000));
-  lastTime = micros();
+  ball.Tick(dt);
   ball.Draw(led_matrix);
   // }
 
