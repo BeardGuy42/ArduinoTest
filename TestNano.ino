@@ -3,10 +3,9 @@
 */
 #include <string.h>
 
-#define USING_SERIAL_MONITOR 0
+#include "GY521.h"
 
-const unsigned char POWER = 3;
-const unsigned char GROUND = 2;
+#define USING_SERIAL_MONITOR 0
 
 class LEDMatrix
 {
@@ -98,16 +97,20 @@ class LEDMatrix
 
     void On(unsigned char x, unsigned char y)
     {
+      if(x > 7 || y > 7) return;
+
       unsigned char yi = (7 - y) + 1;
       unsigned char xi = 7 - x;
 
       rows[yi].data |= (1 << xi);
 
-      // Serial.println("ON: " + String(xi) + ", " + String(yi) + " FROM " + String(x) + ", " + String(y));
+      Serial.println("ON: " + String(xi) + ", " + String(yi) + " FROM " + String(x) + ", " + String(y));
     }
 
     void Off(unsigned char x, unsigned char y)
     {
+      if(x > 7 || y > 7) return;
+      
       unsigned char yi = (7 - y) + 1;
       unsigned char xi = 7 - x;
 
@@ -213,10 +216,11 @@ class LEDMatrix
 
 };
 
-struct Ball
+class Ball
 {
   public:
-  unsigned char x, y;
+  float x, y;
+  float vx, vy;
 
   Ball()
   {
@@ -224,49 +228,125 @@ struct Ball
     y = 4;
   }  
 
-  void Tick(unsigned char timestep)
+  void Tick(float dt)
   {
-    this->x = 3*cos(timestep / 3.14f) + 4;
-    this->y = 3*sin(timestep / 3.14f) + 4;
+    x = vx*dt;
+    y = vy*dt;
+
+    if(x > 7)
+    {
+      x = 7;
+      vx = 0;
+    }
+    else if(x < 0)
+    {
+      x = 0;
+      vx = 0;
+    }
+
+    if(y > 7)
+    {
+      y = 7;
+      vy = 0;
+    } 
+    else if(y < 0)
+    {
+      y = 0;
+      vy = 0;
+    }
   }
 
   void Draw(LEDMatrix* matrix)
   {
-    matrix->On(this->x, this->y);
+    Serial.println(String(this->x) + ", " + String(this->y));
+    matrix->On((unsigned char)floor(this->x), (unsigned char)floor(this->y));
   }
 };
 
 LEDMatrix* led_matrix;
+GY521* gyroscope;
 
 // the setup routine runs once when you press reset:
 void setup() {
-  //Serial.begin(115200);
-  pinMode(GROUND, OUTPUT);
-  pinMode(POWER, OUTPUT);
-
-  //pinMode(A0, OUTPUT);
-
-  digitalWrite(GROUND, LOW);
-  digitalWrite(POWER, HIGH);
+  Serial.begin(115200);
 
   led_matrix = new LEDMatrix();
   led_matrix->Brightness(0x0D);
   led_matrix->Draw();
-//  led_matrix->Test();
+
+  gyroscope = new GY521(0x68);
+  while(gyroscope->wakeup() == false)
+  {
+    Serial.print(millis());
+    Serial.println("\tCould not connect to GY521");
+    delay(1000);
+  }
+
+  gyroscope->setAccelSensitivity(0); // 2g
+  gyroscope->setGyroSensitivity(0); // 250 deg / s
+  gyroscope->setThrottle();
+
+  gyroscope->axe = 0;
+  gyroscope->aye = 0;
+  gyroscope->aze = 0;
+  gyroscope->gxe = 0;
+  gyroscope->gye = 0;
+  gyroscope->gze = 0;
 }
 
 // the loop routine runs over and over again forever:
 void loop() {
   static unsigned char timestep = 0;
+  static int lastTime = 0;
   static Ball ball;
 
+  gyroscope->read();
+  float ax = gyroscope->getAccelX();
+  float ay = gyroscope->getAccelY();
+  float t = gyroscope->getTemperature();
+
+  // if (timestep % 100 == 0)
+  // {
   led_matrix->Clear();
 
-  timestep += 1;
-  ball.Tick(timestep);
+  Serial.println("\n\tACCELEROMETER\tTEMPERATURE\tVELOCITY");
+  Serial.println("\tax\tay\tT\tvx\tvy");
+
+  ball.vx += ax;
+  ball.vy += ay;
+
+  if(ball.vx > 2.5)
+  {
+    ball.vx = 2.5;
+  }
+  
+  if(ball.vy > 2.5)
+  {
+    ball.vy = 2.5;
+  }
+
+  Serial.print(timestep);
+  Serial.print('\t');
+  Serial.print(ax);
+  Serial.print('\t');
+  Serial.print(ay);
+  Serial.print('\t');
+  Serial.print(t);
+  Serial.print('\t');
+  Serial.print(ball.vx);
+  Serial.print('\t');
+  Serial.print(ball.vy);
+  Serial.println();
+  ball.Tick(((micros() - lastTime) / 1000000));
+  lastTime = micros();
   ball.Draw(led_matrix);
+  // }
+
+
+  timestep += 1;
 
   led_matrix->Draw();
+
   //  static unsigned char counter = 0;
   // led_matrix->Brightness(counter++);
 
