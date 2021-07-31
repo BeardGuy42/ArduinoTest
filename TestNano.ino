@@ -5,12 +5,12 @@
 
 #include "GY521.h"
 
-#define USING_SERIAL_MONITOR 0
+#define MATRIX_DIMENSION  8 // 8x8 LED Matrix
+#define GRAVITY_NOISE_THRESHOLD 0.1
 
 class LEDMatrix
 {
   public:
-  const unsigned char MATRIX_DIMENSION = 8; // 8x8 LED Matrix
   
   const unsigned char CLOCK_PIN_ID = 6;
   const unsigned char DIN_PIN_ID = 4;
@@ -206,162 +206,366 @@ class LEDMatrix
     state.WriteTest(this);
   }
 
-  void Draw()
+  void Show()
   {
     //Serial.println("START SHOW ROWS\n");
     state.WriteRows(this);
     //Serial.println("END SHOW ROWS\n");
   }
+};
 
+class Vector2
+{
+public:
+  unsigned char x;
+  unsigned char y;
+
+  bool operator==(Vector2 a)
+  {
+    return ((a.x == this->x) && (a.y == this->y));
+  }
+
+  bool operator!=(Vector2 a)
+  {
+    return ((a.x != this->x) || (a.y != this->y));
+  }
 
 };
 
-class Ball
+class PixelVector
 {
   public:
-  float x, y;
-  float vx, vy;
+    static Vector2 Up = { 0, 1 };
+    static Vector2 UpRight = { 1, 1 };
+    static Vector2 Right = { 1, 0 };
+    static Vector2 DownRight = { 1, -1 };
+    static Vector2 Down = { 0, -1 };
+    static Vector2 DownLeft = { -1, -1 };
+    static Vector2 Left = { -1, 0 };
+    static Vector2 UpLeft = { -1, 1 };
 
-  Ball()
-  {
-    x = 4;
-    y = 4;
-  }  
+    static Vector2 Zero = { 0, 0 };
+    
+    // Note: Order is important here
+    static Vector2 Directions[8] = {
+      {0, 1},
+      {1, 1},
+      {1, 0},
+      {1, -1},
+      {0, -1},
+      {-1, -1},
+      {-1, 0},
+      {-1, 1}
+    };
 
-  void Tick(float dt)
-  {
-    x += vx*dt;
-    y += vy*dt;
-
-    if(x > 7)
+    static Vector2 ToPixelVector(Vector2 g)
     {
-      x = 7;
-      vx = 0;
+      // Normalize g.
+      float mag = sqrt(pow(g.x, 2) + pow(g.y, 2));
+
+      if(mag < GRAVITY_NOISE_THRESHOLD) return PixelVector::Zero; 
+
+      g.x /= mag; // TODO: double check that this casts as intended and that the right results come out (if it arises as a problem)
+      g.y /= mag;
+
+      if(g.x >= cos(3*3.14/8))
+      {
+        g.x = 1;
+      }
+      else if(g.x >= cos(5*3.14/8))
+      {
+        g.x = 0;
+      }
+      else
+      {
+        g.x = -1;
+      }
+
+      if(g.y >= sin(3.14/8))
+      {
+        g.y = 1;
+      }
+      else if(g.y >= sin(9*3.14/8))
+      {
+        g.y = 0;
+      }
+      else
+      {
+        g.y = -1;
+      }
+
+      return g; // TODO: Return g as a pixel vector
     }
-    else if(x < 0)
-    {
-      x = 0;
-      vx = 0;
-    }
 
-    if(y > 7)
+    static Vector2* GetDirectionPixelVectors(Vector2 pixelVector)
     {
-      y = 7;
-      vy = 0;
-    } 
-    else if(y < 0)
-    {
-      y = 0;
-      vy = 0;
-    }
-  }
+      // #define LEFT 0
+      // #define CENTER 1
+      // #define RIGHT 2
+      
+      Vector2 dirPixelVectors[3] = { 
+          PixelVector::Zero,
+          PixelVector::Zero,
+          PixelVector::Zero
+      };
 
-  void Draw(LEDMatrix* matrix)
-  {
-    Serial.println(String(this->x) + ", " + String(this->y));
-    matrix->On((unsigned char)floor(this->x), (unsigned char)floor(this->y));
-  }
+      if(pixelVector != PixelVector::Zero)
+      {
+        //  Find index in All, then pick (i-1)%8, i, (i+1)%8
+        for(int i = 0 ; i < 8; i++)
+        {
+          if(Directions[i] == pixelVector)
+          {
+            dirPixelVectors[0] = Directions[(i - 1)%8];
+            dirPixelVectors[1] = Directions[i];
+            dirPixelVectors[2] = Directions[(i + 1)%8];
+          }
+        }
+      }
+
+      return dirPixelVectors; 
+    }
 };
 
-LEDMatrix* led_matrix;
-GY521* gyroscope;
+// returns accelx and accely value in a vector2.
+class GravitySensor2
+{
+  private:
+    GY521 gyroscope;
+    Vector2 value;
+
+  public:
+    GravitySensor2()
+    {
+      gyroscope = GY521(0x68);
+      while(gyroscope.wakeup() == false)
+      {
+        Serial.print(millis());
+        Serial.println("\tCould not connect to GY521");
+        delay(1000);
+      }
+
+      gyroscope.setAccelSensitivity(0); // 2g
+      gyroscope.setGyroSensitivity(0); // 250 deg / s
+      gyroscope.setThrottle();
+      gyroscope.axe = 0;
+      gyroscope.aye = 0;
+      gyroscope.aze = 0;
+      gyroscope.gxe = 0;
+      gyroscope.gye = 0;
+      gyroscope.gze = 0;
+    }
+
+    Vector2 Value()
+    {
+      gyroscope.read();
+      value.x = gyroscope.getAccelX();
+      value.y = gyroscope.getAccelY();
+
+      return value;
+    }
+};
+
+
+class Sand
+{
+private:
+
+    unsigned char GetBit(unsigned char row, unsigned char bit)
+    {
+      return ((buffer[row] << bit) & 0x80) / 0x80;
+    }
+
+    bool Hot(unsigned char row, unsigned char bit)
+    {
+      return (bool)(((destinationTempBitmap[row] << bit) & 0x80) / 0x80);
+    }
+
+    void On(unsigned char* byte, unsigned char row, unsigned char bit)
+    {
+      *byte |= (1 << bit);      
+    }
+
+    void Off(unsigned char* byte, unsigned char row, unsigned char bit)
+    {
+      *byte &= ~(*byte & (1 << bit));
+    }
+
+
+  // TODO: Apply rule to 'bit' in 'row'.
+    void ApplyRule(Vector2 gravity, unsigned char row, unsigned char bit)
+    {
+        if(Hot(row, bit)) return;   // if we just did something with this data then dont do something immediately again.
+
+        unsigned char data = GetBit(row, bit);
+        
+        switch(data)
+        {
+          case 0:
+          // do nothing.
+          break;
+          case 1:
+          Vector2 g = PixelVector::ToPixelVector(gravity);
+
+          if(g == PixelVector::Zero)
+          {
+            // don't do anything
+            return;
+          }
+          
+          Vector2* destinations = PixelVector::GetDirectionPixelVectors(g);
+
+          // check if we can copy directly towards g.
+          
+          unsigned char destinationRow = row + destinations[1].y;
+          unsigned char destinationBit = bit + destinations[1].x;
+
+          // Bounds check destinationRow and destinationBit
+          if(destinationRow >= MATRIX_DIMENSION || destinationBit >= MATRIX_DIMENSION) 
+            return; // don't do anything, we have an unreachable destination.
+
+          unsigned char destinationData = GetBit(destinationRow, destinationBit);
+
+          switch(destinationData)
+          {
+            case 0:
+            Off(&buffer[row], row, bit);
+            On(&buffer[destinationRow], destinationRow, destinationBit);
+            On(&destinationTempBitmap[destinationRow], destinationRow, destinationBit);
+            
+            break;
+            case 1:
+            // TODO: Try left, then right, otherwise stay
+            unsigned char leftDestinationRow = row + destinations[0].y;
+            unsigned char leftDestinationBit = bit + destinations[0].x;
+            unsigned char rightDestinationRow = row + destinations[2].y;
+            unsigned char rightDestinationBit = bit + destinations[2].x;
+
+            if(leftDestinationRow < MATRIX_DIMENSION && leftDestinationBit < MATRIX_DIMENSION)
+            {
+              unsigned char leftDestinationData = GetBit(leftDestinationRow, leftDestinationBit);
+              switch(leftDestinationData)
+              {
+                case 0:
+                  Off(&buffer[row], row, bit);
+                  On(&buffer[leftDestinationRow], leftDestinationRow, leftDestinationBit);
+                  On(&destinationTempBitmap[leftDestinationRow], leftDestinationRow, leftDestinationBit);
+                  
+                return;
+                break;
+                case 1:
+                // dont do anything
+                break;
+              }
+
+            } 
+
+            if(rightDestinationRow < MATRIX_DIMENSION && rightDestinationBit < MATRIX_DIMENSION)
+            {
+              unsigned char leftDestinationData = GetBit(leftDestinationRow, leftDestinationBit);
+              switch(leftDestinationData)
+              {
+                case 0:
+                  Off(&buffer[row], row, bit);
+                  On(&buffer[rightDestinationRow], rightDestinationRow, rightDestinationBit);
+                  On(&destinationTempBitmap[rightDestinationRow], rightDestinationRow, rightDestinationBit);
+                return;
+                break;
+                case 1:
+                // dont do anything
+                break;
+              }
+            } 
+            break;
+          }
+          break;
+        }
+    }
+
+  public:
+  #define MAX_SAND_COUNT 16
+
+    // bitmap tracks data that was just copied in to a destination (1 is hot: data just copied in, 0 is cold: data has been here past a single tick)
+    unsigned char destinationTempBitmap[8]; 
+    unsigned char buffer[8];
+    unsigned char sandCount;
+
+    class SandSpawnTimer
+    {
+      private:
+        int lastSpawnTime;
+        int spawnPeriod = 1000000; // every 1 million microseconds (1 per second)
+
+      public:
+
+      void Reset()
+      {
+        lastSpawnTime = micros();
+      }
+
+      bool CanSpawn()
+      {
+        return (micros - lastSpawnTime) >= spawnPeriod;
+      }
+    };
+
+    SandSpawnTimer timer;
+
+    Sand()
+    {
+
+    }
+
+    void Spawn()
+    {
+        // TODO: flip 5,7 on based on timer, and if there is a bit already on.
+      if(GetBit(7, 5))
+      {
+        return;
+      }
+
+      if(timer.CanSpawn())
+      {
+        On(&buffer[7], 7, 5);
+        On(&destinationTempBitmap[7], 7, 5);
+        
+        timer.Reset();
+      }
+    }
+
+    // TODO: walk buffer; apply rules
+    void Tick(Vector2 gravity)
+    {
+      // TODO: clear destinationtempbitmap
+
+      // TODO: walk buffer and apply rule to every bit
+      
+    }
+};
+
+GravitySensor2 gravity;
+LEDMatrix led_matrix;
+Sand sand;
 
 // the setup routine runs once when you press reset:
 void setup() {
   Serial.begin(115200);
 
-  led_matrix = new LEDMatrix();
-  led_matrix->Brightness(0x0D);
-  led_matrix->Draw();
-
-  gyroscope = new GY521(0x68);
-  while(gyroscope->wakeup() == false)
-  {
-    Serial.print(millis());
-    Serial.println("\tCould not connect to GY521");
-    delay(1000);
-  }
-
-  gyroscope->setAccelSensitivity(0); // 2g
-  gyroscope->setGyroSensitivity(0); // 250 deg / s
-  gyroscope->setThrottle();
-
-  gyroscope->axe = 0;
-  gyroscope->aye = 0;
-  gyroscope->aze = 0;
-  gyroscope->gxe = 0;
-  gyroscope->gye = 0;
-  gyroscope->gze = 0;
+  led_matrix.Brightness(0x0D);
+  led_matrix.Show(); 
 }
 
 // the loop routine runs over and over again forever:
 void loop() {
   static unsigned char timestep = 0;
   static int lastTime = 0;
-  static Ball ball;
 
   float dt = ((micros() - lastTime) / 1000000);
   lastTime = micros();
 
-  gyroscope->read();
-  float ax = gyroscope->getAccelX();
-  float ay = gyroscope->getAccelY();
-  float t = gyroscope->getTemperature();
-
-  // if (timestep % 100 == 0)
-  // {
-  led_matrix->Clear();
-
-  Serial.println("\n\tACCELEROMETER\tTEMPERATURE\tVELOCITY");
-  Serial.println("\tax\tay\tT\tvx\tvy");
-
-  ball.vx += ax*dt;
-  ball.vy += ay*dt;
-
-  if(abs(ball.vx) > 0.025)
-  {
-    ball.vx /= abs(ball.vx);
-    ball.vx *= 0.025;
-  }
-  
-  if(abs(ball.vy) > 0.025)
-  {
-    ball.vy /= abs(ball.vy);
-    ball.vy *= 0.025;
-  }
-
-  Serial.print(timestep);
-  Serial.print('\t');
-  Serial.print(ax);
-  Serial.print('\t');
-  Serial.print(ay);
-  Serial.print('\t');
-  Serial.print(t);
-  Serial.print('\t');
-  Serial.print(ball.vx);
-  Serial.print('\t');
-  Serial.print(ball.vy);
-  Serial.println();
-  ball.Tick(dt);
-  ball.Draw(led_matrix);
-  // }
-
-
+  led_matrix.Clear();
   timestep += 1;
+  sand.Tick(gravity.Value());
 
-  led_matrix->Draw();
-
-  //  static unsigned char counter = 0;
-  // led_matrix->Brightness(counter++);
-
-  // while(counter < 16)
-  // {
-  //   digitalWrite(led_matrix->CLOCK_PIN_ID, LOW);
-  //   delay(1000);
-  //   digitalWrite(led_matrix->CLOCK_PIN_ID, HIGH);
-  //   Serial.println(String(digitalRead(led_matrix->DOUT_PIN_ID)));
-  //   counter++;
-  // }
-
-
+  led_matrix.Show();
 }
